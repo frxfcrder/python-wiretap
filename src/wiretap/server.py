@@ -1,5 +1,13 @@
 import socket
 import threading
+import logging
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+)
+
+logger = logging.getLogger(__name__)
 
 class TCPServer:
     def __init__(self, host="127.0.0.1", port=8000):
@@ -14,13 +22,13 @@ class TCPServer:
         )
         self.server_socket.bind((self.host, self.port))
         self.server_socket.listen()
-        print(f"Server listening on http://{self.host}:{self.port}")
+        logger.info("Server listening on http://%s:%s", self.host, self.port)
 
         
         while True:
             try:
                 client_socket, client_address = self.server_socket.accept()
-                print(f"Connection from {client_address}")
+                logger.info("Connection from %s", client_address)
 
                 client_thread = threading.Thread(
                     target = self._handle_client,
@@ -29,7 +37,7 @@ class TCPServer:
                 client_thread.start()
 
             except OSError as exc:
-                print(f"Accept failed {exc}")
+                logger.exception("Accept failed")
                 break
 
        
@@ -42,52 +50,58 @@ class TCPServer:
                 return
             buffer += data
 
-        print(buffer.decode("utf-8"))
+        logger.debug("Received request:\n%s", buffer.decode("utf-8"))
         
-        
-
         header_section, separator, body = buffer.partition(b"\r\n\r\n")
 
-        print("RAW BUFFER:", repr(buffer))
-        print("BODY BYTES:", repr(body))
-        print("BODY LENGTH:", len(body))
-
-        
         header_lines = header_section.split(b"\r\n")
         
-
+        logger.debug("Raw buffer: %r", buffer)
+        logger.debug("Body bytes: %r", body)
+        logger.debug("Body length: %d bytes", len(body))
+        
         request_line= header_lines[0].decode("utf-8")
         method, target, version = request_line.split()
 
         headers = {}
-
         for line in header_lines[1:]:
             line = line.decode("utf-8")
 
             if ":" in line:
                 key, value = line.split(":", 1)
                 headers[key.strip().lower()] = value.strip()
-                content_length = int(headers.get("content-length", 0))
+
+
+        content_length = int(headers.get("content-length", 0))
+
+        try:
+            while len(body) < content_length:
                 remaining = content_length - len(body)
-                print(f"Body bytes received: {len(body)}")
-                print(f"Body bytes remaining: {remaining}")
+                data = client_socket.recv(min(1024, remaining))
 
-        print("PARSED HEADERS:")
-        print(headers)
+                if not data:
+                    logging.info("Client disconnected while sending body data")
+                    break
+                
+                body += data
+                    
+        except OSError:
+            logger.debug("Network error while reading request body")
 
-        print(f"Method: {method}")
-        print(f"Target: {target}")
-        print(f"Version: {version}")
+        finally:
+            remaining = max(0, content_length - len(body))
+            client_socket.close()
+            logger.debug(f"Body bytes received: {len(body)}")
+            logger.info(f"Body bytes remaining: {remaining}")
 
-        print("HEADER SECTION:")
-        print(header_section.decode("utf-8"))
 
-        print("BODY:")
-        print(body.decode("utf-8"))
+        
+        logger.debug("Parsed headers: %s", headers)
+        logger.debug("Request: %s %s %s", method, target, version)
+        logger.debug("Header section:\n%s", header_section.decode("utf-8"))
+        logger.debug("Body:\n%s", body.decode("utf-8"))
 
-        client_socket.close()
-        print(f"Disconnected from {client_address}")
-
+        logger.info("Disconnected from %s", client_address)
 
 
 
