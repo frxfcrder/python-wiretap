@@ -19,7 +19,7 @@ def receive_response(client):
     while True:
         try:
             data = client.recv(4096)
-        except socket.timeout:
+        except TimeoutError:
             raise AssertionError("Timed out waiting for server response")
 
         if not data:
@@ -39,32 +39,30 @@ def parse_response(response):
     lines = header_section.split(b"\r\n")
     status_line = lines[0].decode("ascii", errors="replace")
 
-    headers = {}
+    _headers = {}
     for line in lines[1:]:
         if b":" not in line:
             continue
 
         key, value = line.split(b":", 1)
-        headers[key.decode("ascii").strip().lower()] = (
-            value.decode("ascii").strip()
-        )
+        _headers[key.decode("ascii").strip().lower()] = value.decode("ascii").strip()
 
-    return status_line, headers, body
+    return status_line, _headers, body
 
 
 def assert_response(response, expected_status):
     if not response:
         raise AssertionError("Server closed the connection without a response")
 
-    status_line, headers, body = parse_response(response)
+    status_line, _headers, body = parse_response(response)
 
     assert status_line == expected_status, (
         f"Expected {expected_status!r}, got {status_line!r}"
     )
 
-    assert "content-length" in headers, "Missing Content-Length header"
+    assert "content-length" in _headers, "Missing Content-Length header"
 
-    expected_length = int(headers["content-length"])
+    expected_length = int(_headers["content-length"])
     actual_length = len(body)
 
     assert actual_length == expected_length, (
@@ -72,7 +70,7 @@ def assert_response(response, expected_status):
         f"received {actual_length} body bytes"
     )
 
-    return status_line, headers, body
+    return status_line, _headers, body
 
 
 def send_request_and_receive(request_parts):
@@ -102,13 +100,17 @@ def test_chunked_body_arrival():
 
     assert len(expected_body) == 20
 
-    response = send_request_and_receive(
-        [
-            make_headers(len(expected_body)),
-            body_part_1,
-            b"",
-        ]
-    ) if False else None
+    response = (
+        send_request_and_receive(
+            [
+                make_headers(len(expected_body)),
+                body_part_1,
+                b"",
+            ]
+        )
+        if False
+        else None
+    )
 
     with create_connection() as client:
         client.sendall(make_headers(len(expected_body)))
@@ -120,7 +122,7 @@ def test_chunked_body_arrival():
         client.sendall(body_part_2)
         response = receive_response(client)
 
-    status, headers, body = assert_response(response, "HTTP/1.1 200 OK")
+    status, _headers, body = assert_response(response, "HTTP/1.1 200 OK")
 
     print(f"Status: {status}")
     print(f"Response body: {body.decode('utf-8', errors='replace')}")
@@ -134,7 +136,7 @@ def test_disconnect_mid_body():
 
     try:
         client.sendall(make_headers(20))
-        client.sendall(b"Hello")  
+        client.sendall(b"Hello")
     finally:
         client.close()
 
@@ -161,24 +163,20 @@ def test_incomplete_body_returns_400():
 
     with create_connection() as client:
         client.sendall(make_headers(50))
-        client.sendall(b"Short body") 
+        client.sendall(b"Short body")
         client.shutdown(socket.SHUT_WR)
 
         response = receive_response(client)
 
-    status, headers, body = assert_response(
-        response, "HTTP/1.1 400 Bad Request"
-    )
+    status, _headers, body = assert_response(response, "HTTP/1.1 400 Bad Request")
 
     expected_body = b"Error: Incomplete request body."
 
-    assert body == expected_body, (
-        f"Unexpected error response body: {body!r}"
-    )
-    assert int(headers["content-length"]) == len(expected_body)
+    assert body == expected_body, f"Unexpected error response body: {body!r}"
+    assert int(_headers["content-length"]) == len(expected_body)
 
     print(f"Status: {status}")
-    print(f"Content-Length: {headers['content-length']}")
+    print(f"Content-Length: {_headers['content-length']}")
     print("[PASS] Incomplete request rejected with correctly framed 400 response.")
 
 
@@ -196,9 +194,7 @@ def test_malformed_content_length():
 
     response = send_request_and_receive([request])
 
-    status, headers, body = assert_response(
-        response, "HTTP/1.1 400 Bad Request"
-    )
+    status, _headers, body = assert_response(response, "HTTP/1.1 400 Bad Request")
 
     print(f"Status: {status}")
     print(f"Response body: {body.decode('utf-8', errors='replace')}")
@@ -226,10 +222,7 @@ if __name__ == "__main__":
         ("Malformed Content-Length", test_malformed_content_length),
     ]
 
-    results = [
-        run_test(name, test_function)
-        for name, test_function in tests
-    ]
+    results = [run_test(name, test_function) for name, test_function in tests]
 
     passed = sum(results)
     failed = len(results) - passed

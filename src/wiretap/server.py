@@ -38,6 +38,21 @@ class TCPServer:
                 break
 
     def _handle_client(self, client_socket, client_address):
+        status_code = {
+            200: "200 OK",
+            201: "201 Created",
+            204: "204 No Content",
+            301: "301 Moved Permanently",
+            302: "302 Found",
+            400: "400 Bad Request",
+            401: "401 Unauthorized",
+            403: "403 Forbidden",
+            404: "404 Not Found",
+            405: "405 Method Not Allowed",
+            500: "500 Internal Server Error",
+            503: "503 Service Unavailable",
+        }
+
         buffer = b""
 
         while b"\r\n\r\n" not in buffer:
@@ -59,24 +74,24 @@ class TCPServer:
         request_line = header_lines[0].decode("utf-8")
         method, target, version = request_line.split()
 
-        headers = {}
+        _headers = {}
         for line in header_lines[1:]:
             line = line.decode("utf-8")
 
             if ":" in line:
                 key, value = line.split(":", 1)
-                headers[key.strip().lower()] = value.strip()
+                _headers[key.strip().lower()] = value.strip()
 
         try:
-            content_length = int(headers.get("content-length", 0))
+            content_length = int(_headers.get("content-length", 0))
         except ValueError:
             print(f" Malformed Content-Length from {client_address}. Rejecting client.")
-            
+
             malformed_error_body = "Error: Malformed Content-Length Header"
             malformed_error_bytes = malformed_error_body.encode("utf-8")
 
             raw_malformed_response = (
-                "HTTP/1.1 400 Bad Request\r\n"
+                f"HTTP/1.1 {status_code[400]}\r\n"
                 "Content-Type: text/plain; charset=utf-8\r\n"
                 f"Content-Length: {len(malformed_error_bytes)}\r\n"
                 "Connection: close\r\n"
@@ -90,7 +105,6 @@ class TCPServer:
                 pass
             client_socket.close()
             return
-
 
         try:
             while len(body) < content_length:
@@ -109,13 +123,13 @@ class TCPServer:
                     f"Content Verfied Complete ({content_length}) bytes: {body_text}"
                 )
                 response_body = "Success! Message received."
-                response_body_bytes = response_body.encode('utf-8')
+                response_body_bytes = response_body.encode("utf-8")
                 raw_response = (
-                    "HTTP/1.1 200 OK\r\n"
+                    f"HTTP/1.1 {status_code[200]}\r\n"
                     "Content-Type: text/plain; charset=utf-8\r\n"
                     f"Content-Length: {len(response_body_bytes)}\r\n"
                     "Connection: close\r\n"
-                    "\r\n"  
+                    "\r\n"
                     f"{response_body}"
                 )
                 client_socket.sendall(raw_response.encode("utf-8"))
@@ -127,16 +141,16 @@ class TCPServer:
                 bad_request_bytes = bad_request_body.encode("utf-8")
 
                 bad_request_response = (
-                    "HTTP/1.1 400 Bad Request\r\n"
+                    f"HTTP/1.1 {status_code[400]}\r\n"
                     "Content-Type: text/plain; charset=utf-8\r\n"
                     f"Content-Length: {len(bad_request_bytes)}\r\n"
                     "Connection: close\r\n"
                     "\r\n"
                     f"{bad_request_body}"
                 )
-                
+
                 try:
-                    client_socket.sendall(bad_request_response.encode("utf=8"))
+                    client_socket.sendall(bad_request_response.encode("utf-8"))
                 except OSError:
                     pass
 
@@ -149,7 +163,7 @@ class TCPServer:
             logger.debug(f"Body bytes received: {len(body)}")
             logger.info(f"Body bytes remaining: {remaining}")
 
-        logger.debug("Parsed headers: %s", headers)
+        logger.debug("Parsed request headers: %s", _headers)
         logger.debug("Request: %s %s %s", method, target, version)
         logger.debug("Header section:\n%s", header_section.decode("utf-8"))
         logger.debug("Body:\n%s", body.decode("utf-8"))
