@@ -1,13 +1,8 @@
-import logging
+import os
 import socket
 import threading
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-)
-
-logger = logging.getLogger(__name__)
+from logging_setup import log_traffic, logger
 
 
 class TCPServer:
@@ -38,6 +33,8 @@ class TCPServer:
                 break
 
     def _handle_client(self, client_socket, client_address):
+        address_str = f"{client_address[0]}:{client_address[1]}"
+
         status_code = {
             200: "200 OK",
             201: "201 Created",
@@ -58,6 +55,15 @@ class TCPServer:
         while b"\r\n\r\n" not in buffer:
             data = client_socket.recv(1024)
             if not data:
+                log_traffic(
+                    {
+                        "event": "request",
+                        "client": address_str,
+                        "method": None,
+                        "target": None,
+                        "note": "connection closed before completing request",
+                    }
+                )
                 return
             buffer += data
 
@@ -73,6 +79,16 @@ class TCPServer:
 
         request_line = header_lines[0].decode("utf-8")
         method, target, version = request_line.split()
+
+        log_traffic(
+            {
+                "event": "request",
+                "client": address_str,
+                "method": method,
+                "target": target,
+                "version": version,
+            }
+        )
 
         _headers = {}
         for line in header_lines[1:]:
@@ -101,6 +117,15 @@ class TCPServer:
 
             try:
                 client_socket.sendall(raw_malformed_response.encode("utf-8"))
+                log_traffic(
+                    {
+                        "event": "response",
+                        "client": address_str,
+                        "status": 400,
+                        "reason": "Bad Request",
+                        "note": "malformed Content-Length",
+                    }
+                )
             except OSError:
                 pass
             client_socket.close()
@@ -112,6 +137,15 @@ class TCPServer:
                 data = client_socket.recv(min(1024, remaining))
                 if not data:
                     logger.info("Client disconnected while sending body data")
+                    log_traffic(
+                        {
+                            "event": "response",
+                            "client": address_str,
+                            "status": None,
+                            "reason": None,
+                            "note": "no response (client disconnected mid-body)",
+                        }
+                    )
                     break
                 body += data
             else:
@@ -122,6 +156,51 @@ class TCPServer:
                 logger.debug(
                     f"Content Verfied Complete ({content_length}) bytes: {body_text}"
                 )
+
+                if method == "GET" and target in ("/", "/status"):
+                    status_rows = ""
+                    for code, reason in status_code.items():
+                        label = reason.split(" ", 1)[1]
+                        status_rows += (
+                            f"<tr><td><code>{code}</code></td><td>{label}</td></tr>"
+                        )
+
+                    status_page_path = os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)),
+                        "templates",
+                        "status_codes.html",
+                    )
+                    with open(
+                        status_page_path, "r", encoding="utf-8"
+                    ) as status_page_file:
+                        status_page_body = status_page_file.read()
+
+                    status_page_body = status_page_body.replace(
+                        "__STATUS_ROWS__", status_rows
+                    )
+                    status_page_bytes = status_page_body.encode("utf-8")
+
+                    raw_status_page_response = (
+                        f"HTTP/1.1 {status_code[200]}\r\n"
+                        "Content-Type: text/html; charset=utf-8\r\n"
+                        f"Content-Length: {len(status_page_bytes)}\r\n"
+                        "Connection: close\r\n"
+                        "\r\n"
+                        f"{status_page_body}"
+                    )
+                    client_socket.sendall(raw_status_page_response.encode("utf-8"))
+                    log_traffic(
+                        {
+                            "event": "response",
+                            "client": address_str,
+                            "status": 200,
+                            "reason": "OK",
+                            "bytes": len(status_page_bytes),
+                            "note": "status page",
+                        }
+                    )
+                    return
+
                 response_body = "Success! Message received."
                 response_body_bytes = response_body.encode("utf-8")
                 raw_response = (
@@ -133,6 +212,15 @@ class TCPServer:
                     f"{response_body}"
                 )
                 client_socket.sendall(raw_response.encode("utf-8"))
+                log_traffic(
+                    {
+                        "event": "response",
+                        "client": address_str,
+                        "status": 200,
+                        "reason": "OK",
+                        "bytes": len(response_body_bytes),
+                    }
+                )
 
             else:
                 print(f"Dropping Request: Expected {content_length}")
@@ -151,6 +239,17 @@ class TCPServer:
 
                 try:
                     client_socket.sendall(bad_request_response.encode("utf-8"))
+                    log_traffic(
+                        {
+                            "event": "response",
+                            "client": address_str,
+                            "status": 400,
+                            "reason": "Bad Request",
+                            "bytes_in": len(body),
+                            "expected_bytes_in": content_length,
+                            "note": "incomplete body",
+                        }
+                    )
                 except OSError:
                     pass
 
